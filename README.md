@@ -1,2 +1,2 @@
 # Projetos
-Alguns Projetos estarao aqui disponiveis para serem vistos
+Alguns Projetos estarão aqui para visualização
