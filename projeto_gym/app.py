@@ -6,6 +6,7 @@ import time
 import plotly.graph_objects as go
 import random
 import sqlite3
+import hashlib
 
 # --- BANCO DE DADOS SQLITE ---
 def get_db_connection():
@@ -17,6 +18,8 @@ def create_user_table():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS user (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE,
+            senha_hash TEXT,
             nome TEXT,
             idade INTEGER,
             genero TEXT,
@@ -33,6 +36,31 @@ def create_user_table():
     """)
     conn.commit()
     conn.close()
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(email, password, nome, idade):
+    conn = get_db_connection()
+    senha_hash = hash_password(password)
+    try:
+        conn.execute("INSERT INTO user (email, senha_hash, nome, idade, data_cadastro) VALUES (?, ?, ?, ?, date('now'))",
+                     (email, senha_hash, nome, idade))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def login_user(email, password):
+    conn = get_db_connection()
+    senha_hash = hash_password(password)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM user WHERE email=? AND senha_hash=?", (email, senha_hash))
+    user = cur.fetchone()
+    conn.close()
+    return user
 
 def save_user_to_db(user_data):
     conn = get_db_connection()
