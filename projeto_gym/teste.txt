@@ -1,0 +1,114 @@
+<style>
+/* Fundo cinza escuro */
+.stApp {
+    background: #232323;
+}
+
+/* Cabeçalho principal */
+.main-header {
+    font-size: 2.5rem;
+    color: #ff9800;
+    text-align: center;
+    margin-bottom: 2rem;
+    font-weight: 900;
+    letter-spacing: 1px;
+    text-shadow: 1px 2px 8px #111;
+}
+
+/* Subcabeçalho */
+.sub-header {
+    font-size: 1.25rem;
+    color: #ff9800;
+    margin: 1.2rem 0 0.7rem 0;
+    border-left: 4px solid #ff9800;
+    padding-left: 10px;
+    font-weight: 600;
+    background: #333;
+    border-radius: 4px;
+}
+
+/* Cartões de métricas */
+.metric-card {
+    background: #181818;
+    padding: 20px 16px 14px 16px;
+    border-radius: 12px;
+    color: #fff;
+    margin: 10px 0;
+    box-shadow: 0 2px 8px rgba(30,30,30,0.13);
+    text-align: center;
+    font-weight: 600;
+    border: 1px solid #444;
+    transition: box-shadow 0.2s, border 0.2s;
+    border-left: 5px solid #ff9800;
+}
+.metric-card:hover {
+    box-shadow: 0 4px 16px rgba(255,152,0,0.13);
+    border-left: 5px solid #ffa726;
+}
+
+/* Cartões de treino e alimentação */
+.workout-card, .food-card {
+    background: #232323;
+    border-radius: 8px;
+    padding: 13px;
+    margin: 10px 0;
+    border-left: 4px solid #ff9800;
+    box-shadow: 0 1px 4px rgba(30,30,30,0.10);
+    color: #fff;
+}
+.food-card { border-left: 4px solid #ffa726; }
+.completed {
+    background: #2e2e2e;
+    border-left: 4px solid #ffb74d;
+}
+
+/* Botões */
+.stButton button {
+    width: 100%;
+    border-radius: 7px;
+    background: linear-gradient(90deg, #ff9800 0%, #ffa726 100%);
+    color: #181818;
+    font-weight: bold;
+    border: none;
+    padding: 0.7em 0;
+    font-size: 1.08em;
+    box-shadow: 0 1px 4px rgba(255,152,0,0.10);
+    transition: background 0.2s, transform 0.2s;
+}
+.stButton button:hover {
+    background: linear-gradient(90deg, #ffa726 0%, #ff9800 100%);
+    color: #fff;
+    transform: scale(1.01);
+}
+
+/* Divisor de seção */
+.section-divider {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #ff9800, transparent);
+    margin: 1.2rem 0;
+    border-radius: 2px;
+}
+
+/* Sidebar customizado */
+[data-testid="stSidebar"] {
+    background: #181818;
+    color: #fff;
+}
+[data-testid="stSidebar"] .stImage img {
+    border-radius: 10px;
+    margin-bottom: 1em;
+    box-shadow: 0 1px 4px rgba(255,152,0,0.13);
+}
+[data-testid="stSidebar"] .stTitle {
+    color: #ff9800;
+    font-weight: 900;
+    letter-spacing: 1px;
+    
+}
+[data-testid="stSidebar"] .stMarkdown {
+    color: #ffa726;
+    font-weight: 600;
+}
+            
+
+</style>

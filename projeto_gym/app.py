@@ -7,19 +7,38 @@ import plotly.graph_objects as go
 import random
 import sqlite3
 import hashlib
+import re
+
+# --- CONFIGURAÇÃO DE AUTENTICAÇÃO ---
+def make_hashes(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def check_hashes(password, hashed_text):
+    return make_hashes(password) == hashed_text
 
 # --- BANCO DE DADOS SQLITE ---
 def get_db_connection():
     conn = sqlite3.connect("fitnesshub.db", check_same_thread=False)
     return conn
 
-def create_user_table():
+def create_tables():
     conn = get_db_connection()
+    
+    # Tabela de usuários (autenticação)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS user (
+        CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE,
-            senha_hash TEXT,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Tabela de perfis de usuário
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
             nome TEXT,
             idade INTEGER,
             genero TEXT,
@@ -31,70 +50,370 @@ def create_user_table():
             bmi REAL,
             bmr REAL,
             tdee REAL,
-            data_cadastro TEXT
+            data_cadastro TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
         )
     """)
+    
+    # Tabela de treinos
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            plano_nome TEXT,
+            dias_semana TEXT,
+            exercicios TEXT,
+            data_criacao TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
+    # Tabela de histórico de treinos
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workout_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            plano TEXT,
+            data TEXT,
+            inicio TEXT,
+            fim TEXT,
+            duracao REAL,
+            exercicios_completos TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
+    # Tabela de registro alimentar
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS food_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            data TEXT,
+            alimentos TEXT,
+            totais TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
+    # Tabela de progresso
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS progress_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            data TEXT,
+            peso REAL,
+            circunferencia_abdomen INTEGER,
+            observacoes TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
+    # Tabela de água
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS water_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            data TEXT,
+            ml INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
+    # Tabela de sono
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sleep_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            data TEXT,
+            horas REAL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def register_user(email, password, nome, idade):
+# --- FUNÇÕES DE AUTENTICAÇÃO ---
+def add_user(email, password):
     conn = get_db_connection()
-    senha_hash = hash_password(password)
-    try:
-        conn.execute("INSERT INTO user (email, senha_hash, nome, idade, data_cadastro) VALUES (?, ?, ?, ?, date('now'))",
-                     (email, senha_hash, nome, idade))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO users (email, password) VALUES (?, ?)", 
+                (email, make_hashes(password)))
+    conn.commit()
+    conn.close()
 
 def login_user(email, password):
     conn = get_db_connection()
-    senha_hash = hash_password(password)
     cur = conn.cursor()
-    cur.execute("SELECT * FROM user WHERE email=? AND senha_hash=?", (email, senha_hash))
-    user = cur.fetchone()
+    cur.execute("SELECT * FROM users WHERE email = ?", (email,))
+    data = cur.fetchone()
     conn.close()
-    return user
+    
+    if data and check_hashes(password, data[2]):
+        return data[0]  # Retorna o user_id
+    return False
 
-def save_user_to_db(user_data):
+def get_user_email(user_id):
     conn = get_db_connection()
-    conn.execute("DELETE FROM user")
+    cur = conn.cursor()
+    cur.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+    data = cur.fetchone()
+    conn.close()
+    return data[0] if data else None
+
+# --- FUNÇÕES DE PERFIL DO USUÁRIO ---
+def save_user_profile(user_id, user_data):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    # Verifica se já existe um perfil para este usuário
+    cur.execute("SELECT id FROM user_profiles WHERE user_id = ?", (user_id,))
+    existing_profile = cur.fetchone()
+    
+    if existing_profile:
+        # Atualiza o perfil existente
+        cur.execute("""
+            UPDATE user_profiles 
+            SET nome=?, idade=?, genero=?, altura=?, peso=?, objetivo=?, 
+                nivel_atividade=?, meta_peso=?, bmi=?, bmr=?, tdee=?, data_cadastro=?
+            WHERE user_id=?
+        """, (
+            user_data["nome"], user_data["idade"], user_data["genero"], user_data["altura"], 
+            user_data["peso"], user_data["objetivo"], user_data["nivel_atividade"], 
+            user_data["meta_peso"], user_data["bmi"], user_data["bmr"], user_data["tdee"], 
+            user_data["data_cadastro"], user_id
+        ))
+    else:
+        # Insere um novo perfil
+        cur.execute("""
+            INSERT INTO user_profiles 
+            (user_id, nome, idade, genero, altura, peso, objetivo, nivel_atividade, 
+             meta_peso, bmi, bmr, tdee, data_cadastro)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id, user_data["nome"], user_data["idade"], user_data["genero"], 
+            user_data["altura"], user_data["peso"], user_data["objetivo"], 
+            user_data["nivel_atividade"], user_data["meta_peso"], user_data["bmi"], 
+            user_data["bmr"], user_data["tdee"], user_data["data_cadastro"]
+        ))
+    
+    conn.commit()
+    conn.close()
+
+def load_user_profile(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT nome, idade, genero, altura, peso, objetivo, nivel_atividade, 
+               meta_peso, bmi, bmr, tdee, data_cadastro 
+        FROM user_profiles 
+        WHERE user_id = ?
+    """, (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    
+    if row:
+        keys = ["nome", "idade", "genero", "altura", "peso", "objetivo", 
+                "nivel_atividade", "meta_peso", "bmi", "bmr", "tdee", "data_cadastro"]
+        return dict(zip(keys, row))
+    return None
+
+def delete_user_profile(user_id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM user_profiles WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+# --- FUNÇÕES PARA DADOS DO USUÁRIO ---
+def save_workout_plan(user_id, plan_name, plan_data):
+    conn = get_db_connection()
     conn.execute("""
-        INSERT INTO user (nome, idade, genero, altura, peso, objetivo, nivel_atividade, meta_peso, bmi, bmr, tdee, data_cadastro)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO workouts (user_id, plano_nome, dias_semana, exercicios, data_criacao)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, plan_name, 
+          ','.join(plan_data["dias_semana"]), 
+          str(plan_data["exercicios"]), 
+          datetime.now().strftime("%Y-%m-%d")))
+    conn.commit()
+    conn.close()
+
+def load_workout_plans(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT plano_nome, dias_semana, exercicios FROM workouts WHERE user_id = ?", (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    plans = {}
+    for row in rows:
+        plans[row[0]] = {
+            "dias_semana": row[1].split(','),
+            "exercicios": eval(row[2]),
+            "data_criacao": row[3] if len(row) > 3 else ""
+        }
+    return plans
+
+def save_workout_history(user_id, workout_data):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO workout_history 
+        (user_id, plano, data, inicio, fim, duracao, exercicios_completos)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        user_data["nome"], user_data["idade"], user_data["genero"], user_data["altura"], user_data["peso"],
-        user_data["objetivo"], user_data["nivel_atividade"], user_data["meta_peso"], user_data["bmi"],
-        user_data["bmr"], user_data["tdee"], user_data["data_cadastro"]
+        user_id, workout_data["plano"], workout_data["data"], 
+        workout_data["inicio"], workout_data["fim"], workout_data["duracao"],
+        str(workout_data["exercicios_completos"])
     ))
     conn.commit()
     conn.close()
 
-def load_user_from_db():
+def load_workout_history(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT nome, idade, genero, altura, peso, objetivo, nivel_atividade, meta_peso, bmi, bmr, tdee, data_cadastro FROM user LIMIT 1")
-    row = cur.fetchone()
+    cur.execute("""
+        SELECT plano, data, inicio, fim, duracao, exercicios_completos 
+        FROM workout_history 
+        WHERE user_id = ? 
+        ORDER BY data DESC, inicio DESC
+    """, (user_id,))
+    rows = cur.fetchall()
     conn.close()
-    if row:
-        keys = ["nome", "idade", "genero", "altura", "peso", "objetivo", "nivel_atividade", "meta_peso", "bmi", "bmr", "tdee", "data_cadastro"]
-        user_data = dict(zip(keys, row))
-        return user_data
-    return None
+    
+    history = []
+    for row in rows:
+        history.append({
+            "plano": row[0],
+            "data": row[1],
+            "inicio": row[2],
+            "fim": row[3],
+            "duracao": row[4],
+            "exercicios_completos": eval(row[5]) if row[5] else []
+        })
+    return history
 
-def delete_user_from_db():
+def save_food_log(user_id, food_data):
     conn = get_db_connection()
-    conn.execute("DELETE FROM user")
+    conn.execute("""
+        INSERT INTO food_log (user_id, data, alimentos, totais)
+        VALUES (?, ?, ?, ?)
+    """, (
+        user_id, food_data["data"], str(food_data["alimentos"]), str(food_data["totais"])
+    ))
     conn.commit()
     conn.close()
 
-create_user_table()
+def load_food_log(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT data, alimentos, totais 
+        FROM food_log 
+        WHERE user_id = ? 
+        ORDER BY data DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    food_log = []
+    for row in rows:
+        food_log.append({
+            "data": row[0],
+            "alimentos": eval(row[1]) if row[1] else [],
+            "totais": eval(row[2]) if row[2] else {}
+        })
+    return food_log
+
+def save_progress_data(user_id, progress_data):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO progress_data (user_id, data, peso, circunferencia_abdomen, observacoes)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        user_id, progress_data["data"], progress_data["peso"], 
+        progress_data["circunferencia_abdomen"], progress_data["observacoes"]
+    ))
+    conn.commit()
+    conn.close()
+
+def load_progress_data(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT data, peso, circunferencia_abdomen, observacoes 
+        FROM progress_data 
+        WHERE user_id = ? 
+        ORDER BY data DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    progress = []
+    for row in rows:
+        progress.append({
+            "data": row[0],
+            "peso": row[1],
+            "circunferencia_abdomen": row[2],
+            "observacoes": row[3]
+        })
+    return progress
+
+def save_water_log(user_id, water_data):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO water_log (user_id, data, ml)
+        VALUES (?, ?, ?)
+    """, (user_id, water_data["data"], water_data["ml"]))
+    conn.commit()
+    conn.close()
+
+def load_water_log(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT data, ml 
+        FROM water_log 
+        WHERE user_id = ? 
+        ORDER BY data DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    water_log = []
+    for row in rows:
+        water_log.append({
+            "data": row[0],
+            "ml": row[1]
+        })
+    return water_log
+
+def save_sleep_log(user_id, sleep_data):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO sleep_log (user_id, data, horas)
+        VALUES (?, ?, ?)
+    """, (user_id, sleep_data["data"], sleep_data["horas"]))
+    conn.commit()
+    conn.close()
+
+def load_sleep_log(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT data, horas 
+        FROM sleep_log 
+        WHERE user_id = ? 
+        ORDER BY data DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    
+    sleep_log = []
+    for row in rows:
+        sleep_log.append({
+            "data": row[0],
+            "horas": row[1]
+        })
+    return sleep_log
 
 # --- EMBELEZAMENTO E CSS ---
 st.set_page_config(
@@ -136,6 +455,8 @@ st.markdown("""
 
 /* Cartões de métricas */
 .metric-card {
+    display: flex;
+    flex-direction: column;
     background: #181818;
     padding: 20px 16px 14px 16px;
     border-radius: 12px;
@@ -147,7 +468,9 @@ st.markdown("""
     border: 1px solid #444;
     transition: box-shadow 0.2s, border 0.2s;
     border-left: 5px solid #ff9800;
+    
 }
+
 .metric-card:hover {
     box-shadow: 0 4px 16px rgba(255,152,0,0.13);
     border-left: 5px solid #ffa726;
@@ -216,25 +539,37 @@ st.markdown("""
     color: #ffa726;
     font-weight: 600;
 }
-            
 
+/* Formulários de login */
+.login-container {
+    background: #1e1e1e;
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid #444;
+    margin: 2rem auto;
+    max-width: 500px;
+}
+.login-header {
+    text-align: center;
+    color: #ff9800;
+    margin-bottom: 1.5rem;
+    font-size: 1.8rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 class FitnessHub:
     def __init__(self):
+        create_tables()  # Cria as tabelas no banco de dados
         self.initialize_session_state()
         self.load_food_database()
         self.load_motivational_phrases()
         self.load_jokes()
-        # Carregar usuário do banco ao iniciar
-        if st.session_state.user_data is None:
-            user_db = load_user_from_db()
-            if user_db:
-                st.session_state.user_data = user_db
         
     def initialize_session_state(self):
         defaults = {
+            "user_id": None,
+            "user_email": None,
             "user_data": None,
             "workout_plans": {},
             "active_workout": None,
@@ -248,7 +583,8 @@ class FitnessHub:
             "today_food": [],
             "water_log": [],
             "sleep_log": [],
-            "selected": "Dashboard"
+            "selected": "Dashboard",
+            "just_logged_in": False
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -314,6 +650,82 @@ class FitnessHub:
             "O que o tomate foi fazer no banco? Tirar extrato."
         ]
 
+    def login_section(self):
+        st.markdown('<div class="login-header">💪 FitBuddy</div>', unsafe_allow_html=True)
+        st.markdown('<div style="text-align: center; margin-bottom: 2rem; color: #ffa726;">Seu Companheiro Fitness<br><br>NÃO UTILIZE DADOS REAIS</div>', unsafe_allow_html=True)
+        
+        tab1, tab2 = st.tabs(["Login", "Registrar"])
+        
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("EMAIL FALSO")
+                password = st.text_input("SENHA FALSA", type="password")
+                submit = st.form_submit_button("Entrar")
+                
+                if submit:
+                    user_id = login_user(email, password)
+                    if user_id:
+                        st.session_state.user_id = user_id
+                        st.session_state.user_email = email
+                        st.session_state.just_logged_in = True
+                        self.load_user_data()
+                        st.success("Login realizado com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("Email ou senha não cadastrados ou incorretos")
+        
+        with tab2:
+            with st.form("register_form"):
+                email = st.text_input("EMAIL FALSO")
+                password = st.text_input("SENHA FALSA", type="password")
+                confirm_password = st.text_input("CONFIRMAR SENHA FALSA", type="password")
+                submit = st.form_submit_button("Criar Conta")
+                
+                if submit:
+                    if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                        st.error("Por favor, insira um email com '@gmail.com'")
+                    elif len(password) < 3:
+                        st.error("A senha deve ter pelo menos 3 caracteres")
+                    elif password != confirm_password:
+                        st.error("As senhas não coincidem")
+                    else:
+                        try:
+                            add_user(email, password)
+                            st.success("Conta criada com sucesso! Faça login para continuar.")
+                        except sqlite3.IntegrityError:
+                            st.error("Este email já está em uso")
+
+    def load_user_data(self):
+        # Carrega os dados do usuário do banco de dados
+        if st.session_state.user_id:
+            # Carrega perfil do usuário
+            st.session_state.user_data = load_user_profile(st.session_state.user_id)
+            
+            # Carrega planos de treino
+            st.session_state.workout_plans = load_workout_plans(st.session_state.user_id)
+            
+            # Carrega histórico de treinos
+            st.session_state.workout_history = load_workout_history(st.session_state.user_id)
+            
+            # Carrega registro alimentar
+            st.session_state.food_log = load_food_log(st.session_state.user_id)
+            
+            # Carrega dados de progresso
+            st.session_state.progress_data = load_progress_data(st.session_state.user_id)
+            
+            # Carrega registro de água
+            st.session_state.water_log = load_water_log(st.session_state.user_id)
+            
+            # Carrega registro de sono
+            st.session_state.sleep_log = load_sleep_log(st.session_state.user_id)
+
+    def logout(self):
+        # Limpa todos os dados da sessão
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        self.initialize_session_state()
+        st.rerun()
+
     def motivational_card(self):
         st.markdown('<div class="sub-header">💡 Motivação do Dia</div>', unsafe_allow_html=True)
         st.info(f"**{random.choice(self.motivational_phrases)}**")
@@ -325,16 +737,21 @@ class FitnessHub:
     def water_tracker(self, meta_agua=None):
         st.markdown('<div class="sub-header">💧 Controle de Água</div>', unsafe_allow_html=True)
         today = datetime.now().strftime("%Y-%m-%d")
-        if "water_log" not in st.session_state:
-            st.session_state.water_log = []
+        
+        # Filtra apenas os registros de água de hoje
         water_today = [w for w in st.session_state.water_log if w["data"] == today]
         total_ml = sum([w["ml"] for w in water_today])
+        
         st.write(f"Total consumido hoje: **{total_ml} ml**")
         ml = st.number_input("Adicionar água (ml)", min_value=50, max_value=2000, step=50, value=250)
+        
         if st.button("Registrar Água"):
-            st.session_state.water_log.append({"data": today, "ml": ml})
+            water_data = {"data": today, "ml": ml}
+            save_water_log(st.session_state.user_id, water_data)
+            st.session_state.water_log.append(water_data)
             st.success(f"{ml} ml adicionados!")
             st.rerun()
+        
         # Sincroniza meta de água
         meta = meta_agua if meta_agua else 2000
         st.progress(min(total_ml/meta, 1.0), text=f"Meta diária: {meta}ml")
@@ -342,16 +759,21 @@ class FitnessHub:
     def sleep_tracker(self):
         st.markdown('<div class="sub-header">😴 Controle de Sono</div>', unsafe_allow_html=True)
         today = datetime.now().strftime("%Y-%m-%d")
-        if "sleep_log" not in st.session_state:
-            st.session_state.sleep_log = []
+        
+        # Filtra apenas os registros de sono de hoje
+        sleep_today = [s for s in st.session_state.sleep_log if s["data"] == today]
+        
         horas = st.number_input("Horas de sono na última noite", min_value=0.0, max_value=24.0, step=0.5, value=8.0)
+        
         if st.button("Registrar Sono"):
-            st.session_state.sleep_log.append({"data": today, "horas": horas})
+            sleep_data = {"data": today, "horas": horas}
+            save_sleep_log(st.session_state.user_id, sleep_data)
+            st.session_state.sleep_log.append(sleep_data)
             st.success(f"{horas} horas registradas!")
             st.rerun()
-        ultimos = [s for s in st.session_state.sleep_log if s["data"] == today]
-        if ultimos:
-            st.write(f"Hoje: {ultimos[-1]['horas']} horas")
+        
+        if sleep_today:
+            st.write(f"Hoje: {sleep_today[-1]['horas']} horas")
         else:
             st.info("Registre suas horas de sono para acompanhar seu descanso.")
 
@@ -422,16 +844,9 @@ class FitnessHub:
         if st.session_state.user_data:
             st.info(f"Usuário cadastrado: {st.session_state.user_data['nome']}")
             if st.button("🗑️ Excluir Conta", type="primary"):
-                delete_user_from_db()
-                # Limpa todos os dados da sessão relacionados ao usuário
-                for key in [
-                    "user_data", "workout_plans", "active_workout", "workout_history",
-                    "diet_plans", "active_diet", "food_log", "progress_data",
-                    "current_date", "selected_plan", "today_food", "water_log", "sleep_log"
-                ]:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                st.success("Conta excluída com sucesso!")
+                delete_user_profile(st.session_state.user_id)
+                st.session_state.user_data = None
+                st.success("Dados do perfil excluídos com sucesso!")
                 st.rerun()
             return
 
@@ -455,7 +870,7 @@ class FitnessHub:
                     bmi = self.calculate_bmi(peso, altura)
                     bmr = self.calculate_bmr(peso, altura, idade, genero)
                     tdee = self.calculate_tdee(bmr, nivel_atividade)
-                    st.session_state.user_data = {
+                    user_data = {
                         "nome": nome,
                         "idade": idade,
                         "genero": genero,
@@ -469,7 +884,8 @@ class FitnessHub:
                         "tdee": tdee,
                         "data_cadastro": datetime.now().strftime("%Y-%m-%d")
                     }
-                    save_user_to_db(st.session_state.user_data)
+                    save_user_profile(st.session_state.user_id, user_data)
+                    st.session_state.user_data = user_data
                     st.success("Perfil salvo com sucesso!")
                     st.rerun()
                 else:
@@ -512,11 +928,13 @@ class FitnessHub:
                     }
             submit = st.form_submit_button("Salvar Plano de Treino")
             if submit and nome_plano and dias_semana and plano_treino:
-                st.session_state.workout_plans[nome_plano] = {
+                plan_data = {
                     "dias_semana": dias_semana,
                     "exercicios": plano_treino,
                     "data_criacao": datetime.now().strftime("%Y-%m-%d")
                 }
+                save_workout_plan(st.session_state.user_id, nome_plano, plan_data)
+                st.session_state.workout_plans[nome_plano] = plan_data
                 st.success(f"Plano '{nome_plano}' salvo com sucesso!")
 
     def start_workout(self):
@@ -571,6 +989,7 @@ class FitnessHub:
                 "duracao": duracao,
                 "exercicios_completos": st.session_state.active_workout["exercicios_completos"]
             }
+            save_workout_history(st.session_state.user_id, registro)
             st.session_state.workout_history.append(registro)
             st.session_state.active_workout = None
             st.session_state.start_time = None
@@ -639,6 +1058,7 @@ class FitnessHub:
                             "gordura": total_gordura
                         }
                     }
+                    save_food_log(st.session_state.user_id, refeicao)
                     st.session_state.food_log.append(refeicao)
                     st.session_state.today_food = []
                     st.success("Refeição salva no histórico!")
@@ -729,6 +1149,7 @@ class FitnessHub:
                     "circunferencia_abdomen": circunferencia_abdomen,
                     "observacoes": observacoes
                 }
+                save_progress_data(st.session_state.user_id, registro)
                 st.session_state.progress_data.append(registro)
                 st.session_state.user_data["peso"] = peso
                 st.success("Progresso registrado com sucesso!")
@@ -756,7 +1177,7 @@ class FitnessHub:
         st.markdown('<h1 class="main-header">💪 FitBuddy</h1>', unsafe_allow_html=True)
         st.markdown('<p style="text-align: center; font-size: 1.2rem;">Seu Companheiro Fitness Completo</p>', unsafe_allow_html=True)
         if not st.session_state.user_data:
-            st.info("👋 Bem-vindo! Comece preenchendo seu cadastro para personalizar sua experiência.")
+            st.info("👋 Bem-vindo! Complete seu cadastro para personalizar sua experiência.")
             return
         user = st.session_state.user_data
 
@@ -777,7 +1198,7 @@ class FitnessHub:
         with col2:
             st.markdown(f"""
             <div class="metric-card">
-                <h3>🔥 Calorias/dia</h3>
+                <h3>🔥 Calorias</h3>
                 <h2>{meta_calorias} kcal</h2>
                 <p>Meta diária</p>
             </div>
@@ -785,7 +1206,7 @@ class FitnessHub:
         with col3:
             st.markdown(f"""
             <div class="metric-card">
-                <h3>💧 Água/dia</h3>
+                <h3>💧 Água</h3>
                 <h2>{meta_agua} ml</h2>
                 <p>Meta diária</p>
             </div>
@@ -793,7 +1214,7 @@ class FitnessHub:
         with col4:
             st.markdown(f"""
             <div class="metric-card">
-                <h3>⏱️ Treino mínimo</h3>
+                <h3>⏱️ Duração do Treino</h3>
                 <h2>{meta_treino} min</h2>
                 <p>Por sessão</p>
             </div>
@@ -854,22 +1275,20 @@ class FitnessHub:
             return "Obesidade"
 
     def run(self):
-        # Sempre força o cadastro antes de liberar o resto do app
-        if not st.session_state.user_data:
-            st.sidebar.title("💪 FitBuddy")
-            st.sidebar.image("https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=300", use_container_width=True)
-            st.sidebar.markdown("---")
-            st.sidebar.info("Complete seu cadastro para acessar o aplicativo.")
-            st.sidebar.markdown("*FitBuddy*<br><span style='font-size:0.9em;color:#888;'>by Guilherme</span>", unsafe_allow_html=True)
-            self.user_registration()
+        # Verifica se o usuário está logado
+        if not st.session_state.user_id:
+            self.login_section()
             return
 
-        # Menu lateral normal após cadastro
+        # Menu lateral normal após login
         if "selected" not in st.session_state:
             st.session_state.selected = "Dashboard"
+            
         with st.sidebar:
             st.title("💪 FitBuddy")
+            st.markdown(f"**Usuário:** {st.session_state.user_email}")
             st.markdown("---")
+            
             menu_options = {
                 "Dashboard": "📊",
                 "Cadastro": "👤",
@@ -880,11 +1299,14 @@ class FitnessHub:
                 "Histórico de Treinos": "📋",
                 "Acompanhamento": "🎯"
             }
+            
             for option, emoji in menu_options.items():
                 if st.button(f"{emoji} {option}", use_container_width=True, key=f"btn_{option}"):
                     st.session_state.selected = option
                     st.rerun()
+                    
             st.markdown("---")
+            
             if st.session_state.user_data:
                 st.markdown("### 👤 Seu Perfil")
                 user = st.session_state.user_data
@@ -892,8 +1314,20 @@ class FitnessHub:
                 st.write(f"**Idade:** {user['idade']} anos")
                 st.write(f"**Peso:** {user['peso']} kg")
                 st.write(f"**Objetivo:** {user['objetivo']}")
+                
             st.markdown("---")
-            st.markdown("*FitBuddy - Versão Alfa 0.1*<br><span style='font-size:0.9em;color:#888;'>by Guilherme Gama</span>", unsafe_allow_html=True)
+            
+            if st.button("🚪 Sair", use_container_width=True):
+                self.logout()
+                
+            st.markdown("*FitBuddy - Versão 1.0*<br><span style='font-size:0.9em;color:#888;'>by Guilherme Gama</span>", unsafe_allow_html=True)
+
+        # Carrega os dados do usuário se acabou de fazer login
+        if st.session_state.just_logged_in:
+            self.load_user_data()
+            st.session_state.just_logged_in = False
+
+        # Renderiza a página selecionada
         if st.session_state.selected == "Dashboard":
             self.dashboard()
         elif st.session_state.selected == "Cadastro":
