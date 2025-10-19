@@ -8,7 +8,6 @@ import random
 import sqlite3
 import hashlib
 import re
-import json
 
 # --- CONFIGURAÇÃO DE AUTENTICAÇÃO ---
 def make_hashes(password):
@@ -231,9 +230,9 @@ def save_workout_plan(user_id, plan_name, plan_data):
     conn.execute("""
         INSERT INTO workouts (user_id, plano_nome, dias_semana, exercicios, data_criacao)
         VALUES (?, ?, ?, ?, ?)
-    """, (user_id, plan_name,
-          json.dumps(plan_data["dias_semana"], ensure_ascii=False),
-          json.dumps(plan_data["exercicios"], ensure_ascii=False),
+    """, (user_id, plan_name, 
+          ','.join(plan_data["dias_semana"]), 
+          str(plan_data["exercicios"]), 
           datetime.now().strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
@@ -241,17 +240,15 @@ def save_workout_plan(user_id, plan_name, plan_data):
 def load_workout_plans(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT plano_nome, dias_semana, exercicios, data_criacao FROM workouts WHERE user_id = ?", (user_id,))
+    cur.execute("SELECT plano_nome, dias_semana, exercicios FROM workouts WHERE user_id = ?", (user_id,))
     rows = cur.fetchall()
     conn.close()
-
+    
     plans = {}
     for row in rows:
-        dias = json.loads(row[1]) if row[1] else []
-        exercicios = json.loads(row[2]) if row[2] else []
         plans[row[0]] = {
-            "dias_semana": dias,
-            "exercicios": exercicios,
+            "dias_semana": row[1].split(','),
+            "exercicios": eval(row[2]),
             "data_criacao": row[3] if len(row) > 3 else ""
         }
     return plans
@@ -263,9 +260,9 @@ def save_workout_history(user_id, workout_data):
         (user_id, plano, data, inicio, fim, duracao, exercicios_completos)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
-        user_id, workout_data["plano"], workout_data["data"],
+        user_id, workout_data["plano"], workout_data["data"], 
         workout_data["inicio"], workout_data["fim"], workout_data["duracao"],
-        json.dumps(workout_data["exercicios_completos"], ensure_ascii=False)
+        str(workout_data["exercicios_completos"])
     ))
     conn.commit()
     conn.close()
@@ -281,7 +278,7 @@ def load_workout_history(user_id):
     """, (user_id,))
     rows = cur.fetchall()
     conn.close()
-
+    
     history = []
     for row in rows:
         history.append({
@@ -290,7 +287,7 @@ def load_workout_history(user_id):
             "inicio": row[2],
             "fim": row[3],
             "duracao": row[4],
-            "exercicios_completos": json.loads(row[5]) if row[5] else []
+            "exercicios_completos": eval(row[5]) if row[5] else []
         })
     return history
 
@@ -899,78 +896,38 @@ class FitnessHub:
         if not st.session_state.user_data:
             st.warning("Complete seu cadastro primeiro!")
             return
-
-        # garantir estrutura temporária para montar o plano como tabela
-        if "tmp_plan" not in st.session_state:
-            st.session_state.tmp_plan = {
-                "nome_plano": "",
-                "dias_semana": [],
-                "exercicios": []  # lista ordenada de dicts: {grupo, exercicio, series, repeticoes, descanso}
-            }
-
         with st.form("workout_plan"):
-            st.session_state.tmp_plan["nome_plano"] = st.text_input("Nome do Plano*", value=st.session_state.tmp_plan["nome_plano"])
-            st.session_state.tmp_plan["dias_semana"] = st.multiselect("Dias da Semana*", 
-                                                                      ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"],
-                                                                      default=st.session_state.tmp_plan["dias_semana"])
-            st.markdown("**Adicionar Exercício (ordem preservada)**")
-
-            colg, cole, col1, col2, col3 = st.columns([2,3,2,2,2])
-            with colg:
-                grupo = colg.selectbox("Grupo Muscular", ["Peito","Costas","Pernas","Ombros","Braços","Abdômen"], key="new_grp")
-            with cole:
-                exercicio = cole.text_input("Nome do Exercício", key="new_ex")
-            with col1:
-                series = col1.number_input("Séries", min_value=1, max_value=10, value=3, key="new_ser")
-            with col2:
-                repeticoes = col2.number_input("Repetições", min_value=1, max_value=50, value=12, key="new_rep")
-            with col3:
-                descanso = col3.number_input("Descanso (s)", min_value=10, max_value=600, value=60, key="new_desc")
-            if st.form_submit_button("Adicionar Exercício", on_click=None):
-                if exercicio.strip():
-                    st.session_state.tmp_plan["exercicios"].append({
-                        "grupo": grupo,
-                        "exercicio": exercicio.strip(),
-                        "series": int(series),
-                        "repeticoes": int(repeticoes),
-                        "descanso": int(descanso)
-                    })
-                    # limpa campos
-                    st.session_state["new_ex"] = ""
-                    st.session_state["new_ser"] = 3
-                    st.session_state["new_rep"] = 12
-                    st.session_state["new_desc"] = 60
-                    st.experimental_rerun()
-
-        # mostra tabela de exercícios atuais do plano e permitir remoção/ordenação simples
-        if st.session_state.tmp_plan["exercicios"]:
-            st.markdown("**Exercícios adicionados (ordem):**")
-            for idx, ex in enumerate(st.session_state.tmp_plan["exercicios"]):
-                cols = st.columns([6,1,1])
-                with cols[0]:
-                    st.write(f"{idx+1}. {ex['grupo']} — {ex['exercicio']} — {ex['series']}×{ex['repeticoes']} (desc {ex['descanso']}s)")
-                with cols[1]:
-                    if st.button("↑", key=f"up_{idx}") and idx > 0:
-                        lst = st.session_state.tmp_plan["exercicios"]
-                        lst[idx-1], lst[idx] = lst[idx], lst[idx-1]
-                        st.experimental_rerun()
-                with cols[2]:
-                    if st.button("✖", key=f"del_{idx}"):
-                        st.session_state.tmp_plan["exercicios"].pop(idx)
-                        st.experimental_rerun()
-
-        st.markdown("---")
-        if st.button("Salvar Plano de Treino Final"):
-            nome_plano = st.session_state.tmp_plan["nome_plano"].strip()
-            dias_semana = st.session_state.tmp_plan["dias_semana"]
-            plano_treino = st.session_state.tmp_plan["exercicios"]
-            if not nome_plano:
-                st.error("Informe um nome para o plano.")
-            elif not dias_semana:
-                st.error("Selecione ao menos um dia da semana.")
-            elif not plano_treino:
-                st.error("Adicione ao menos um exercício.")
-            else:
+            nome_plano = st.text_input("Nome do Plano*")
+            dias_semana = st.multiselect("Dias da Semana*",
+                ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"])
+            st.markdown("**Exercícios por Grupo Muscular**")
+            grupos_musculares = {
+                "Peito": ["Supino reto", "Supino inclinado", "Crucifixo", "Flexão", "Crossover"],
+                "Costas": ["Puxada frontal", "Remada curvada", "Pull-down", "Barra fixa", "Pulley"],
+                "Pernas": ["Agachamento", "Leg press", "Cadeira extensora", "Stiff", "Afundo", "Cadeira flexora"],
+                "Ombros": ["Desenvolvimento", "Elevação lateral", "Remada alta", "Face pull", "Elevação frontal"],
+                "Braços": ["Rosca direta", "Tríceps testa", "Rosca martelo", "Tríceps pulley", "Rosca scott"],
+                "Abdômen": ["Abdominal crunch", "Prancha", "Elevação de pernas", "Russian twist", "Abdominal bicicleta"]
+            }
+            plano_treino = {}
+            for grupo, exercicios in grupos_musculares.items():
+                if st.checkbox(f"{grupo}"):
+                    exercicio_selecionado = st.selectbox(f"Exercício para {grupo}", exercicios, key=f"ex_{grupo}")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        series = st.slider(f"Séries para {grupo}", 1, 10, 3, key=f"ser_{grupo}")
+                    with col2:
+                        repeticoes = st.slider(f"Repetições para {grupo}", 1, 20, 12, key=f"rep_{grupo}")
+                    with col3:
+                        descanso = st.slider(f"Descanso (segundos)", 30, 180, 60, key=f"desc_{grupo}")
+                    plano_treino[grupo] = {
+                        "exercicio": exercicio_selecionado,
+                        "series": series,
+                        "repeticoes": repeticoes,
+                        "descanso": descanso
+                    }
+            submit = st.form_submit_button("Salvar Plano de Treino")
+            if submit and nome_plano and dias_semana and plano_treino:
                 plan_data = {
                     "dias_semana": dias_semana,
                     "exercicios": plano_treino,
@@ -978,58 +935,49 @@ class FitnessHub:
                 }
                 save_workout_plan(st.session_state.user_id, nome_plano, plan_data)
                 st.session_state.workout_plans[nome_plano] = plan_data
-                # limpar tmp
-                st.session_state.tmp_plan = {"nome_plano":"", "dias_semana":[], "exercicios":[]}
                 st.success(f"Plano '{nome_plano}' salvo com sucesso!")
+
+    def start_workout(self):
+        if not st.session_state.workout_plans:
+            st.warning("Nenhum plano de treino disponível. Crie um plano primeiro!")
+            return
+        st.markdown('<div class="sub-header">🚀 Iniciar Treino</div>', unsafe_allow_html=True)
+        planos = list(st.session_state.workout_plans.keys())
+        plano_selecionado = st.selectbox("Selecione o plano de treino", planos)
+        if st.button("Iniciar Treino"):
+            st.session_state.active_workout = {
+                "plano": plano_selecionado,
+                "inicio": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "exercicios_completos": [],
+                "status": "em_andamento"
+            }
+            st.success(f"Treino '{plano_selecionado}' iniciado!")
+            st.rerun()
 
     def workout_tracker(self):
         if not st.session_state.active_workout:
             return
         st.markdown('<div class="sub-header">⏱️ Treino em Andamento</div>', unsafe_allow_html=True)
         plano_nome = st.session_state.active_workout["plano"]
-        plano = st.session_state.workout_plans.get(plano_nome)
-        if not plano:
-            st.error("Plano não encontrado.")
-            return
-
+        plano = st.session_state.workout_plans[plano_nome]
         st.info(f"Plano: {plano_nome} | Iniciado: {st.session_state.active_workout['inicio']}")
         if 'start_time' not in st.session_state:
             st.session_state.start_time = time.time()
-
         elapsed_time = time.time() - st.session_state.start_time
         mins, secs = divmod(int(elapsed_time), 60)
         st.write(f"⏰ Tempo decorrido: {mins:02d}:{secs:02d}")
-
-        exercises = plano["exercicios"]
-        completed = st.session_state.active_workout.get("exercicios_completos", [])
-        next_index = next((i for i, e in enumerate(exercises) if e.get("grupo") not in completed and i not in [None]), None)
-        # next_index defines next incomplete by index (we consider completed list stores grupos or indices; ensure indices)
-        # normalize completed storage as indices for safety
-        if completed and isinstance(completed[0], str):
-            # older format: groups stored; map to indices
-            completed_idx = [i for i, ex in enumerate(exercises) if ex["grupo"] in completed]
-            st.session_state.active_workout["exercicios_completos"] = completed_idx
-            completed = st.session_state.active_workout["exercicios_completos"]
-
-        for i, ex in enumerate(exercises):
-            done = i in st.session_state.active_workout.get("exercicios_completos", [])
-            card_class = "workout-card completed" if done else "workout-card"
+        for i, (grupo, detalhes) in enumerate(plano["exercicios"].items()):
+            completed = grupo in st.session_state.active_workout["exercicios_completos"]
+            card_class = "workout-card completed" if completed else "workout-card"
             st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
-            st.markdown(f"**{i+1}. {ex['grupo']}**: {ex['exercicio']}")
-            st.markdown(f"Séries: {ex['series']} × {ex['repeticoes']} reps | Descanso: {ex['descanso']}s")
-            # only allow completing the next incomplete exercise (sequential)
-            if not done:
-                if i == (min([idx for idx in range(len(exercises)) if idx not in st.session_state.active_workout.get('exercicios_completos', [])]) if len(st.session_state.active_workout.get('exercicios_completos', [])) < len(exercises) else None):
-                    if st.button(f"Completar {i+1}", key=f"complete_{i}"):
-                        st.session_state.active_workout.setdefault("exercicios_completos", []).append(i)
-                        st.rerun()
-                else:
-                    st.button(f"Completar {i+1}", key=f"disabled_{i}", disabled=True)
-            else:
-                st.markdown("✅ Concluído")
+            st.markdown(f"**{grupo}**: {detalhes['exercicio']}")
+            st.markdown(f"Séries: {detalhes['series']} × {detalhes['repeticoes']} reps | Descanso: {detalhes['descanso']}s")
+            if not completed:
+                if st.button(f"Completar {grupo}", key=f"complete_{i}"):
+                    st.session_state.active_workout["exercicios_completos"].append(grupo)
+                    st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
-
-        todos_completos = len(st.session_state.active_workout.get("exercicios_completos", [])) == len(exercises)
+        todos_completos = len(st.session_state.active_workout["exercicios_completos"]) == len(plano["exercicios"])
         if st.button("Finalizar Treino", disabled=not todos_completos):
             fim = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             duracao = time.time() - st.session_state.start_time
@@ -1397,3 +1345,7 @@ class FitnessHub:
             self.workout_history_view()
         elif st.session_state.selected == "Acompanhamento":
             self.progress_tracking()
+
+if __name__ == "__main__":
+    app = FitnessHub()
+    app.run()
